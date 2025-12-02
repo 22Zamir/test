@@ -1,0 +1,126 @@
+{% extends 'base.html' %}
+
+{% block title %}Создать кампанию{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h3 class="mb-0"><i class="bi bi-plus-circle"></i> Создать новую кампанию</h3>
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+                    
+                    <div class="mb-3">
+                        <label for="{{ form.name.id_for_label }}" class="form-label">
+                            {{ form.name.label }}
+                        </label>
+                        {{ form.name }}
+                        {% if form.name.errors %}
+                            <div class="text-danger small">{{ form.name.errors }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="{{ form.geo.id_for_label }}" class="form-label">
+                            {{ form.geo.label }}
+                        </label>
+                        {{ form.geo }}
+                        {% if form.geo.help_text %}
+                            <div class="form-text">{{ form.geo.help_text }}</div>
+                        {% endif %}
+                        {% if form.geo.errors %}
+                            <div class="text-danger small">{{ form.geo.errors }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="{{ form.offer_id.id_for_label }}" class="form-label">
+                            {{ form.offer_id.label }}
+                        </label>
+                        {{ form.offer_id }}
+                        {% if form.offer_id.help_text %}
+                            <div class="form-text">{{ form.offer_id.help_text }}</div>
+                        {% endif %}
+                        {% if form.offer_id.errors %}
+                            <div class="text-danger small">{{ form.offer_id.errors }}</div>
+                        {% endif %}
+                    </div>
+
+                    <hr class="my-4">
+                    <h5 class="mb-3"><i class="bi bi-gear"></i> Дополнительные настройки (опционально)</h5>
+
+                    <div class="mb-3">
+                        <label for="{{ form.domain.id_for_label }}" class="form-label">
+                            {{ form.domain.label }}
+                        </label>
+                        {{ form.domain }}
+                        {% if form.domain.help_text %}
+                            <div class="form-text">{{ form.domain.help_text }}</div>
+                        {% endif %}
+                        {% if form.domain.errors %}
+                            <div class="text-danger small">{{ form.domain.errors }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="{{ form.group.id_for_label }}" class="form-label">
+                            {{ form.group.label }}
+                        </label>
+                        {{ form.group }}
+                        {% if form.group.help_text %}
+                            <div class="form-text">{{ form.group.help_text }}</div>
+                        {% endif %}
+                        {% if form.group.errors %}
+                            <div class="text-danger small">{{ form.group.errors }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="{{ form.source.id_for_label }}" class="form-label">
+                            {{ form.source.label }}
+                        </label>
+                        {{ form.source }}
+                        {% if form.source.help_text %}
+                            <div class="form-text">{{ form.source.help_text }}</div>
+                        {% endif %}
+                        {% if form.source.errors %}
+                            <div class="text-danger small">{{ form.source.errors }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <a href="{% url 'campaign_list' %}" class="btn btn-secondary">
+                            <i class="bi bi-arrow-left"></i> Отмена
+                        </a>
+                        <button type="submit" class="btn btn-success">
+                            <i class="bi bi-check-circle"></i> Создать
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mt-4">
+            <div class="card-body">
+                <h5><i class="bi bi-info-circle"></i> Информация</h5>
+                <p class="text-muted">
+                    При создании кампании автоматически создаются два потока:
+                </p>
+                <ul>
+                    <li><strong>Flow 1:</strong> Пользователи из указанной страны будут перенаправлены на Google</li>
+                    <li><strong>Flow 2:</strong> Остальные пользователи будут перенаправлены на выбранный оффер</li>
+                </ul>
+                <p class="text-muted mt-3">
+                    <strong>Примечание:</strong> Поля "Домен", "Группа" и "Источник" являются опциональными. 
+                    Если они не указаны, кампания будет создана без этих параметров. 
+                    Вы можете указать их позже в настройках Keitaro или оставить пустыми.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

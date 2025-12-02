@@ -1,0 +1,31 @@
+# Django Code Style Rules
+
+## General
+- Use type hints where appropriate
+- Follow PEP 8 style guide
+- Use descriptive variable and function names
+- Write docstrings for classes and functions
+
+## Django Specific
+- Use Django's built-in features (forms, models, views)
+- Prefer class-based views over function-based views
+- Use Django's ORM instead of raw SQL
+- Use Django's settings for configuration
+- Follow Django's naming conventions
+
+## Code Organization
+- Keep views thin, business logic in services/utils
+- Use separate files for models, views, forms, serializers
+- Group related functionality in apps
+
+## Error Handling
+- Use try-except blocks for API calls
+- Return meaningful error messages
+- Log errors appropriately
+
+## Testing
+- Write tests for critical functionality
+- Use Django's TestCase for unit tests
+
+
+

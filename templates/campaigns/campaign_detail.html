@@ -1,0 +1,129 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ campaign.name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-megaphone"></i> {{ campaign.name }}</h1>
+    <a href="{% url 'campaign_edit' campaign.pk %}" class="btn btn-warning">
+        <i class="bi bi-pencil"></i> Редактировать
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> Информация о кампании</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-borderless">
+                    <tr>
+                        <th width="40%">Название:</th>
+                        <td>{{ campaign.name }}</td>
+                    </tr>
+                    <tr>
+                        <th>Geo:</th>
+                        <td><span class="badge bg-info">{{ campaign.geo }}</span></td>
+                    </tr>
+                    <tr>
+                        <th>Keitaro ID:</th>
+                        <td>{{ campaign.keitaro_id|default:"—" }}</td>
+                    </tr>
+                    <tr>
+                        <th>Домен:</th>
+                        <td>{{ campaign.domain|default:"—" }}</td>
+                    </tr>
+                    <tr>
+                        <th>Группа:</th>
+                        <td>{{ campaign.group|default:"—" }}</td>
+                    </tr>
+                    <tr>
+                        <th>Источник:</th>
+                        <td>{{ campaign.source|default:"—" }}</td>
+                    </tr>
+                    <tr>
+                        <th>Создана:</th>
+                        <td>{{ campaign.created_at|date:"d.m.Y H:i" }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Потоки</h5>
+            </div>
+            <div class="card-body">
+                {% if flows %}
+                    <ul class="list-group list-group-flush">
+                        {% for flow in flows %}
+                        <li class="list-group-item">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>{{ flow.name }}</strong>
+                                    <br>
+                                    <small class="text-muted">
+                                        {% if flow.flow_type == 'country_filter' %}
+                                            <i class="bi bi-globe"></i> Фильтр: {{ flow.country }} → Google
+                                        {% else %}
+                                            <i class="bi bi-box-arrow-right"></i> Редирект на офферы
+                                        {% endif %}
+                                    </small>
+                                </div>
+                                <span class="badge bg-success">ID: {{ flow.keitaro_id|default:"—" }}</span>
+                            </div>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="text-muted">Потоки не найдены</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header bg-warning text-dark">
+        <h5 class="mb-0"><i class="bi bi-gift"></i> Офферы в кампании</h5>
+    </div>
+    <div class="card-body">
+        {% if offers %}
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Название</th>
+                        <th>Вес</th>
+                        <th>Добавлен</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for offer in offers %}
+                    <tr>
+                        <td>{{ offer.offer_id }}</td>
+                        <td>{{ offer.offer_name|default:"—" }}</td>
+                        <td><span class="badge bg-secondary">{{ offer.weight }}</span></td>
+                        <td>{{ offer.created_at|date:"d.m.Y H:i" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p class="text-muted">Офферы не добавлены</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="mt-4">
+    <a href="{% url 'campaign_list' %}" class="btn btn-secondary">
+        <i class="bi bi-arrow-left"></i> Назад к списку
+    </a>
+</div>
+{% endblock %}
+
+
+
