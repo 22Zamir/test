@@ -15,11 +15,62 @@ logger = logging.getLogger(__name__)
 
 
 class CampaignListView(ListView):
-    """Список всех кампаний."""
+    """Список активных кампаний (синхронизируется с Keitaro API)."""
     model = Campaign
     template_name = 'campaigns/campaign_list.html'
     context_object_name = 'campaigns'
     paginate_by = 20
+
+    def get_queryset(self):
+        """Получает активные кампании из API и синхронизирует с БД."""
+        api_error = None
+        try:
+            service = CampaignService()
+            active_campaigns = service.sync_active_campaigns_from_api()
+            
+            if not active_campaigns:
+                logger.warning("Не получено активных кампаний из API")
+                # Проверяем, была ли ошибка API
+                try:
+                    # Пробуем еще раз, чтобы проверить ошибку
+                    test_campaigns = service.api.get_campaigns()
+                    if not test_campaigns:
+                        messages.info(self.request, 'В Keitaro нет активных кампаний.')
+                except Exception as e:
+                    error_msg = str(e)
+                    if '401' in error_msg or 'Unauthorized' in error_msg:
+                        messages.error(self.request, 'Ошибка авторизации Keitaro API. Проверьте KEITARO_API_KEY в файле .env')
+                    else:
+                        messages.warning(self.request, f'Не удалось получить кампании из Keitaro API: {str(e)}')
+                return Campaign.objects.none()
+            
+            # Получаем только keitaro_id активных кампаний
+            active_keitaro_ids = [c.keitaro_id for c in active_campaigns if c.keitaro_id is not None]
+            
+            if not active_keitaro_ids:
+                logger.warning("Нет активных кампаний с keitaro_id")
+                return Campaign.objects.none()
+            
+            logger.info(f"Фильтруем кампании по keitaro_id: {active_keitaro_ids}")
+            
+            # Возвращаем только активные кампании, отсортированные по дате создания
+            # Исключаем кампании без keitaro_id
+            queryset = Campaign.objects.filter(
+                keitaro_id__in=active_keitaro_ids
+            ).exclude(keitaro_id__isnull=True).order_by('-created_at')
+            
+            logger.info(f"Найдено {queryset.count()} активных кампаний в БД из {len(active_keitaro_ids)} в API")
+            return queryset
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении активных кампаний: {e}", exc_info=True)
+            error_msg = str(e)
+            if '401' in error_msg or 'Unauthorized' in error_msg:
+                messages.error(self.request, 'Ошибка авторизации Keitaro API. Проверьте KEITARO_API_KEY в файле .env')
+            else:
+                messages.error(self.request, f'Ошибка при синхронизации с Keitaro API: {str(e)}')
+            # В случае ошибки возвращаем пустой список, чтобы не показывать удаленные кампании
+            return Campaign.objects.none()
 
 
 class CampaignCreateView(View):
@@ -59,7 +110,22 @@ class CampaignDetailView(DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['offers'] = self.object.campaign_offers.all()
+        
+        # Синхронизируем потоки из Keitaro API, если у кампании есть keitaro_id
+        if self.object.keitaro_id:
+            try:
+                service = CampaignService()
+                service.fetch_streams_from_keitaro(self.object)
+                logger.info(f"Синхронизированы потоки для кампании {self.object.pk} (keitaro_id={self.object.keitaro_id})")
+            except Exception as e:
+                logger.warning(f"Не удалось синхронизировать потоки для кампании {self.object.pk}: {e}")
+        
+        # Получаем только активные офферы (не удаленные)
+        from .models import CampaignOffer
+        context['offers'] = CampaignOffer.objects.filter(
+            campaign=self.object,
+            status='active'
+        ).select_related('flow').order_by('-created_at')
         context['flows'] = self.object.flows.all()
         context['add_offer_form'] = OfferAddForm()
         return context
@@ -70,9 +136,26 @@ class CampaignEditView(View):
 
     def get(self, request, pk):
         campaign = get_object_or_404(Campaign, pk=pk)
+        
+        # Синхронизируем потоки из Keitaro API, если у кампании есть keitaro_id
+        if campaign.keitaro_id:
+            try:
+                service = CampaignService()
+                service.fetch_streams_from_keitaro(campaign)
+                logger.info(f"Синхронизированы потоки для кампании {campaign.pk} (keitaro_id={campaign.keitaro_id})")
+            except Exception as e:
+                logger.warning(f"Не удалось синхронизировать потоки для кампании {campaign.pk}: {e}")
+        
         flows = campaign.flows.all()
-        # Получаем все активные офферы (не только те, у которых есть flow)
-        offers = campaign.campaign_offers.filter(status='active').select_related('flow')
+        
+        # Получаем все активные офферы напрямую из БД (не через related manager)
+        # Это гарантирует, что мы получим актуальные данные после редиректа
+        from .models import CampaignOffer
+        offers = CampaignOffer.objects.filter(
+            campaign=campaign,
+            status='active'
+        ).select_related('flow').order_by('-created_at')
+        
         add_form = OfferAddForm()
         flow_form = FlowCreateForm()
         
@@ -93,14 +176,25 @@ class CampaignEditView(View):
             if form.is_valid():
                 try:
                     service = CampaignService()
-                    service.add_offer_to_campaign(
+                    campaign_offer = service.add_offer_to_campaign(
                         campaign=campaign,
                         offer_id=form.cleaned_data['offer_id'],
                         weight=form.cleaned_data['weight']
                     )
+                    # Обновляем объект кампании из БД, чтобы получить актуальные данные
+                    campaign.refresh_from_db()
+                    
+                    # Явно проверяем, что оффер сохранен
+                    from .models import CampaignOffer
+                    saved_count = CampaignOffer.objects.filter(
+                        campaign=campaign,
+                        status='active'
+                    ).count()
+                    logger.info(f"Оффер {campaign_offer.offer_id} добавлен, обновлен объект кампании {campaign.pk}. Всего активных офферов в БД: {saved_count}")
+                    
                     messages.success(request, 'Оффер успешно добавлен в кампанию!')
                 except Exception as e:
-                    logger.error(f"Error adding offer: {e}")
+                    logger.error(f"Error adding offer: {e}", exc_info=True)
                     messages.error(request, f'Ошибка при добавлении оффера: {str(e)}')
             else:
                 messages.error(request, 'Проверьте правильность введенных данных')
@@ -160,6 +254,8 @@ class CampaignEditView(View):
                     for error in errors:
                         messages.error(request, f'{field}: {error}')
 
+        # После всех действий делаем редирект на страницу редактирования
+        # При GET запросе данные будут загружены заново из БД
         return redirect('campaign_edit', pk=campaign.pk)
 
 
@@ -174,6 +270,24 @@ class RemoveOfferView(View):
             return JsonResponse({'success': True, 'message': 'Оффер успешно удален'})
         except Exception as e:
             logger.error(f"Error removing offer: {e}")
+            return JsonResponse({'success': False, 'message': str(e)}, status=400)
+
+
+class DeleteFlowView(View):
+    """AJAX view для удаления потока."""
+
+    def post(self, request, pk, flow_id):
+        campaign = get_object_or_404(Campaign, pk=pk)
+        flow = get_object_or_404(Flow, pk=flow_id, campaign=campaign)
+        try:
+            service = CampaignService()
+            success = service.delete_flow(flow)
+            if success:
+                return JsonResponse({'success': True, 'message': 'Поток успешно удален'})
+            else:
+                return JsonResponse({'success': False, 'message': 'Не удалось удалить поток из Keitaro'}, status=400)
+        except Exception as e:
+            logger.error(f"Error deleting flow: {e}", exc_info=True)
             return JsonResponse({'success': False, 'message': str(e)}, status=400)
 
 
@@ -268,6 +382,38 @@ class SearchOffersView(View):
         except Exception as e:
             logger.error(f"Error searching offers: {e}")
             return JsonResponse({'success': False, 'message': str(e)}, status=400)
+
+
+class CampaignHistoryView(View):
+    """История удаленных кампаний."""
+    template_name = 'campaigns/campaign_history.html'
+
+    def get(self, request):
+        """Отображает список удаленных кампаний из Keitaro API."""
+        try:
+            service = CampaignService()
+            deleted_campaigns = service.get_deleted_campaigns_from_api()
+            
+            # Получаем также кампании из БД, которых нет в активных
+            active_campaigns = service.sync_active_campaigns_from_api()
+            active_keitaro_ids = {c.keitaro_id for c in active_campaigns if c.keitaro_id}
+            
+            # Кампании из БД, которых нет в активных
+            db_deleted_campaigns = Campaign.objects.exclude(
+                keitaro_id__in=active_keitaro_ids
+            ).exclude(keitaro_id__isnull=True).order_by('-created_at')
+            
+            return render(request, self.template_name, {
+                'deleted_campaigns_api': deleted_campaigns,
+                'deleted_campaigns_db': db_deleted_campaigns,
+            })
+        except Exception as e:
+            logger.error(f"Ошибка при получении истории кампаний: {e}", exc_info=True)
+            messages.error(request, f'Ошибка при загрузке истории: {str(e)}')
+            return render(request, self.template_name, {
+                'deleted_campaigns_api': [],
+                'deleted_campaigns_db': [],
+            })
 
 
 class DiagnosticView(View):

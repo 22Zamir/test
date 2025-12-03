@@ -128,6 +128,41 @@ class KeitaroAPI:
         
         return self._make_request('POST', '/campaigns', data=data)
 
+    def get_campaigns(self, limit: Optional[int] = None) -> List[Dict]:
+        """
+        Получает список всех активных кампаний.
+        
+        Args:
+            limit: Максимальное количество кампаний для получения (None = все)
+        """
+        params = {}
+        if limit:
+            params['limit'] = limit
+        
+        response = self._make_request('GET', '/campaigns', params=params if params else None)
+        
+        if isinstance(response, list):
+            logger.info(f"Получено {len(response)} кампаний из API (limit={limit})")
+            return response
+        elif isinstance(response, dict):
+            # Некоторые API возвращают объект с данными
+            if 'data' in response:
+                campaigns = response['data']
+                logger.info(f"Получено {len(campaigns)} кампаний из API (в объекте data)")
+                return campaigns if isinstance(campaigns, list) else []
+            elif 'campaigns' in response:
+                campaigns = response['campaigns']
+                logger.info(f"Получено {len(campaigns)} кампаний из API (в объекте campaigns)")
+                return campaigns if isinstance(campaigns, list) else []
+        
+        logger.warning(f"Неожиданный формат ответа API: {type(response)}")
+        return []
+
+    def get_deleted_campaigns(self) -> List[Dict]:
+        """Получает список удаленных кампаний."""
+        response = self._make_request('GET', '/campaigns/deleted')
+        return response if isinstance(response, list) else []
+
     def get_campaign(self, campaign_id: int) -> Dict:
         """Получает информацию о кампании."""
         return self._make_request('GET', f'/campaigns/{campaign_id}')
@@ -138,8 +173,25 @@ class KeitaroAPI:
 
     def get_campaign_streams(self, campaign_id: int) -> List[Dict]:
         """Получает все потоки кампании."""
+        logger.info(f"Запрос потоков для кампании {campaign_id}: GET /campaigns/{campaign_id}/streams")
         response = self._make_request('GET', f'/campaigns/{campaign_id}/streams')
-        return response if isinstance(response, list) else []
+        
+        if isinstance(response, list):
+            logger.info(f"Получено {len(response)} потоков для кампании {campaign_id}")
+            return response
+        elif isinstance(response, dict):
+            # Некоторые API возвращают объект с данными
+            if 'data' in response:
+                streams = response['data']
+                logger.info(f"Получено {len(streams)} потоков для кампании {campaign_id} (в объекте data)")
+                return streams if isinstance(streams, list) else []
+            elif 'streams' in response:
+                streams = response['streams']
+                logger.info(f"Получено {len(streams)} потоков для кампании {campaign_id} (в объекте streams)")
+                return streams if isinstance(streams, list) else []
+        
+        logger.warning(f"Неожиданный формат ответа API для потоков кампании {campaign_id}: {type(response)}")
+        return []
 
     def get_stream_schemas(self) -> List[Dict]:
         """Получает доступные схемы потоков."""
@@ -200,11 +252,29 @@ class KeitaroAPI:
             'name': name,
             'campaign_id': campaign_id,
             'schema': schema,
-            'action_payload': action_payload,
         }
-        # action_type может быть необязательным для некоторых схем
-        if action_type:
-            data['action_type'] = action_type
+        
+        # Для схемы 'landings' с офферами используем поле 'offers' напрямую
+        if schema == 'landings' and isinstance(action_payload, dict) and 'offers' in action_payload:
+            # Для landings с офферами используем поле offers напрямую
+            data['offers'] = action_payload['offers']
+            # action_payload может быть пустым или не передаваться
+            if action_type:
+                data['action_type'] = action_type
+        else:
+            # action_payload может быть строкой (для redirect) или словарем
+            if isinstance(action_payload, str):
+                # Если это строка (URL), используем её напрямую
+                data['action_payload'] = action_payload
+            elif isinstance(action_payload, dict):
+                data['action_payload'] = action_payload
+            else:
+                data['action_payload'] = action_payload if action_payload else ''
+            
+            # action_type может быть необязательным для некоторых схем
+            if action_type:
+                data['action_type'] = action_type
+        
         if filters:
             data['filters'] = filters
         

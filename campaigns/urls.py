@@ -6,6 +6,7 @@ from . import views
 
 urlpatterns = [
     path('', views.CampaignListView.as_view(), name='campaign_list'),
+    path('history/', views.CampaignHistoryView.as_view(), name='campaign_history'),
     path('create/', views.CampaignCreateView.as_view(), name='campaign_create'),
     path('<int:pk>/', views.CampaignDetailView.as_view(), name='campaign_detail'),
     path('<int:pk>/edit/', views.CampaignEditView.as_view(), name='campaign_edit'),
@@ -15,6 +16,7 @@ urlpatterns = [
     path('<int:pk>/offers/<int:offer_id>/remove/', views.RemoveOfferView.as_view(), name='remove_offer'),
     path('<int:pk>/offers/<int:offer_id>/bring-back/', views.BringBackOfferView.as_view(), name='bring_back_offer'),
     path('<int:pk>/offers/<int:offer_id>/pin-weight/', views.PinWeightView.as_view(), name='pin_weight'),
+    path('<int:pk>/flows/<int:flow_id>/delete/', views.DeleteFlowView.as_view(), name='delete_flow'),
     path('search-offers/', views.SearchOffersView.as_view(), name='search_offers'),
     path('<int:pk>/diagnostic/', views.DiagnosticView.as_view(), name='diagnostic'),
 ]

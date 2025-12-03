@@ -444,115 +444,58 @@ class CampaignService:
         offer_id: int,
         weight: int = 1
     ) -> CampaignOffer:
-        """Добавляет оффер в кампанию."""
-        # Находим поток для офферов
-        flow = campaign.flows.filter(flow_type='offer_redirect').first()
-        
-        if not flow:
-            # Если потока нет, создаем его
-            if not campaign.keitaro_id:
-                raise ValueError("Кампания не имеет keitaro_id")
-            
-            # Получаем информацию об оффере
-            try:
-                offer_data = self.api.get_offer(offer_id)
-                offer_name = offer_data.get('name', '')
-            except Exception as e:
-                logger.warning(f"Не удалось получить информацию об оффере {offer_id}: {e}")
-                offer_name = ''
-            
-            # Создаем поток с офферами
-            offer_schema = self._get_schema_for_offers()
-            offer_action_type = self._get_action_type_for_offers()
-            
-            flow_data = self.api.create_flow(
-                campaign_id=campaign.keitaro_id,
-                name=f"Flow 2 - Offer {offer_id}",
-                action_type=offer_action_type,
-                action_payload={
-                    'offers': [{
-                        'id': offer_id,
-                        'weight': weight
-                    }]
-                },
-                schema=offer_schema
-            )
-            
-            if flow_data and flow_data.get('id'):
-                flow = Flow.objects.create(
-                    campaign=campaign,
-                    keitaro_id=flow_data.get('id'),
-                    name=flow_data.get('name', f'Flow 2 - Offer {offer_id}'),
-                    flow_type='offer_redirect',
-                    is_published=True,
-                    has_changes=False
-                )
-            else:
-                # Если получили None (ошибка 500, но allow_500=True), проверяем, создался ли поток
-                logger.warning(f"Получен None при создании потока, проверяем, создался ли он")
-                flow = self._check_and_save_flow_if_exists(campaign, campaign.keitaro_id, offer_id, offer_name)
-                if not flow:
-                    raise ValueError("Не удалось создать поток для оффера. Попробуйте позже.")
-        else:
-            # Если поток есть, добавляем оффер через API
-            if flow.keitaro_id:
-                try:
-                    # Получаем текущий поток
-                    current_flow = self.api.get_flow(flow.keitaro_id)
-                    if current_flow:
-                        current_offers = current_flow.get('action_payload', {}).get('offers', [])
-                        
-                        # Проверяем, не добавлен ли уже оффер
-                        if not any(o.get('id') == offer_id for o in current_offers):
-                            current_offers.append({
-                                'id': offer_id,
-                                'weight': weight
-                            })
-                            
-                            # Обновляем поток
-                            self.api.update_flow(flow.keitaro_id, {
-                                'action_payload': {
-                                    'offers': current_offers
-                                }
-                            })
-                    else:
-                        logger.warning(f"Не удалось получить поток {flow.keitaro_id} из Keitaro")
-                except Exception as e:
-                    logger.warning(f"Не удалось добавить оффер через API: {e}")
-            
-            # Получаем информацию об оффере
-            try:
-                offer_data = self.api.get_offer(offer_id)
-                offer_name = offer_data.get('name', '')
-            except Exception as e:
-                logger.warning(f"Не удалось получить информацию об оффере {offer_id}: {e}")
-                offer_name = ''
+        """Добавляет оффер в кампанию без привязки к потоку."""
+        # Получаем информацию об оффере
+        try:
+            offer_data = self.api.get_offer(offer_id)
+            offer_name = offer_data.get('name', '')
+        except Exception as e:
+            logger.warning(f"Не удалось получить информацию об оффере {offer_id}: {e}")
+            offer_name = ''
 
-        # Сохраняем в БД
-        campaign_offer, created = CampaignOffer.objects.get_or_create(
+        # Сохраняем в БД без привязки к потоку (flow=None)
+        # Проверяем, не был ли оффер ранее удален
+        existing_offer = CampaignOffer.objects.filter(
+            campaign=campaign,
+            offer_id=offer_id
+        ).first()
+        
+        if existing_offer:
+            # Если оффер был удален, восстанавливаем его при добавлении
+            if existing_offer.status == 'removed':
+                logger.info(f"Восстанавливаем ранее удаленный оффер {offer_id} в кампании {campaign.pk}")
+            
+            # Обновляем оффер (восстанавливаем, если был удален)
+            existing_offer.flow = None  # Оффер добавляется в кампанию, но не в поток
+            existing_offer.offer_name = offer_name
+            existing_offer.weight = weight
+            existing_offer.status = 'active'
+            existing_offer.save()
+            logger.info(f"Оффер {offer_id} обновлен в кампании {campaign.pk} (ID в БД: {existing_offer.pk})")
+            campaign_offer = existing_offer
+        else:
+            # Создаем новый оффер
+            campaign_offer = CampaignOffer.objects.create(
+                campaign=campaign,
+                offer_id=offer_id,
+                flow=None,  # Оффер добавляется в кампанию, но не в поток
+                offer_name=offer_name,
+                weight=weight,
+                status='active'
+            )
+            logger.info(f"Оффер {offer_id} создан в кампании {campaign.pk} (ID в БД: {campaign_offer.pk})")
+        
+        # Проверяем, что оффер действительно сохранен
+        saved_offer = CampaignOffer.objects.filter(
             campaign=campaign,
             offer_id=offer_id,
-            defaults={
-                'flow': flow,
-                'offer_name': offer_name,
-                'weight': weight,
-                'status': 'active'
-            }
-        )
-
-        if not created:
-            campaign_offer.flow = flow
-            campaign_offer.weight = weight
-            campaign_offer.status = 'active'
-            campaign_offer.save()
-
-        # Помечаем поток как имеющий изменения
-        flow.has_changes = True
-        flow.save()
-
-        # Пересчитываем веса
-        self.recalculate_weights(flow)
-
+            status='active'
+        ).first()
+        if saved_offer:
+            logger.info(f"Проверка: оффер {offer_id} найден в БД, статус: {saved_offer.status}, flow: {saved_offer.flow}")
+        else:
+            logger.error(f"ОШИБКА: оффер {offer_id} не найден в БД после сохранения!")
+        
         return campaign_offer
 
     def remove_offer_from_campaign(
@@ -569,8 +512,10 @@ class CampaignService:
         if not offer:
             raise ValueError("Оффер не найден")
 
+        # Помечаем оффер как удаленный
         offer.status = 'removed'
         offer.save()
+        logger.info(f"Оффер {offer_id} помечен как removed в кампании {campaign.pk}. Flow: {offer.flow}, flow_id: {offer.flow_id if offer.flow else None}")
 
         if offer.flow:
             offer.flow.has_changes = True
@@ -630,38 +575,88 @@ class CampaignService:
         if not campaign.keitaro_id:
             raise ValueError("Кампания не имеет keitaro_id")
 
+        logger.info(f"Загружаем потоки для кампании {campaign.pk} (keitaro_id={campaign.keitaro_id})")
         streams_data = self.api.get_campaign_streams(campaign.keitaro_id)
+        logger.info(f"Получено {len(streams_data)} потоков из API для кампании {campaign.keitaro_id}")
+        
+        if not streams_data:
+            logger.warning(f"API вернул пустой список потоков для кампании {campaign.keitaro_id}")
+            return
+        
         keitaro_offer_ids = set()
 
         for stream_data in streams_data:
             stream_id = stream_data.get('id')
+            if not stream_id:
+                logger.warning(f"Пропущен поток без ID: {stream_data}")
+                continue
+                
             stream_name = stream_data.get('name', '')
             action_type = stream_data.get('action_type', '')
             schema = stream_data.get('schema', '')
+            
+            # action_payload может быть строкой или словарем
             action_payload = stream_data.get('action_payload', {})
+            if isinstance(action_payload, str):
+                # Если это строка, пытаемся распарсить или используем пустой dict
+                try:
+                    import json
+                    action_payload = json.loads(action_payload) if action_payload else {}
+                except:
+                    action_payload = {}
+            
+            # Офферы могут быть в корне потока или в action_payload
+            offers_in_stream = stream_data.get('offers', [])
+            offers_in_payload = action_payload.get('offers', []) if isinstance(action_payload, dict) else []
+            offers = offers_in_stream or offers_in_payload
+            
+            # Определяем тип потока
+            has_offers = bool(offers)
+            flow_type = 'offer_redirect' if has_offers else 'country_filter'
+            
+            logger.debug(f"Обрабатываем поток: id={stream_id}, name={stream_name}, type={flow_type}, offers_count={len(offers)}")
 
             # Получаем или создаем поток
-            flow, _ = Flow.objects.get_or_create(
+            flow, created = Flow.objects.get_or_create(
                 campaign=campaign,
                 keitaro_id=stream_id,
                 defaults={
                     'name': stream_name,
-                    'flow_type': 'offer_redirect' if action_payload.get('offers') else 'country_filter',
+                    'flow_type': flow_type,
                     'is_published': True,
                     'has_changes': False
                 }
             )
 
-            flow.name = stream_name
-            flow.save()
+            if not created:
+                # Обновляем существующий поток
+                flow.name = stream_name
+                flow.flow_type = flow_type
+                flow.save()
+            else:
+                logger.info(f"Создан новый поток в БД: keitaro_id={stream_id}, name={stream_name}")
 
             # Если это поток с офферами, обрабатываем офферы
-            if action_payload.get('offers'):
-                offers = action_payload.get('offers', [])
+            if offers:
                 
                 for offer_data in offers:
-                    offer_id = offer_data.get('id')
+                    if not isinstance(offer_data, dict):
+                        logger.warning(f"Пропущен оффер с неверным форматом: {type(offer_data)}, data={offer_data}")
+                        continue
+                    
+                    # В API офферы могут иметь разные структуры
+                    # Может быть offer_id или id
+                    offer_id = offer_data.get('offer_id') or offer_data.get('id')
+                    if not offer_id:
+                        logger.warning(f"Пропущен оффер без ID: {offer_data}")
+                        continue
+                    
+                    # Вес может быть в share (процент) или weight
                     offer_weight = offer_data.get('weight', 1)
+                    if 'share' in offer_data:
+                        # Если есть share (процент), используем его как вес
+                        offer_weight = max(1, int(offer_data.get('share', 1)))
+                    
                     keitaro_offer_ids.add(offer_id)
 
                     try:
@@ -671,6 +666,18 @@ class CampaignService:
                         logger.warning(f"Не удалось получить информацию об оффере {offer_id}: {e}")
                         offer_name = ''
 
+                    # Проверяем, не был ли оффер удален пользователем
+                    existing_removed_offer = CampaignOffer.objects.filter(
+                        campaign=campaign,
+                        offer_id=offer_id,
+                        status='removed'
+                    ).first()
+                    
+                    if existing_removed_offer:
+                        # Если оффер был удален пользователем, не восстанавливаем его автоматически
+                        logger.debug(f"Оффер {offer_id} был удален пользователем, пропускаем автоматическую активацию при синхронизации")
+                        continue
+                    
                     offer, created = CampaignOffer.objects.get_or_create(
                         campaign=campaign,
                         offer_id=offer_id,
@@ -683,21 +690,30 @@ class CampaignService:
                     )
 
                     if not created:
+                        # Обновляем существующий активный оффер
                         offer.flow = flow
                         offer.weight = offer_weight
                         offer.status = 'active'
                         offer.save()
 
-        # Помечаем как removed офферы, которых нет в Keitaro
+        # Помечаем как removed офферы, которые привязаны к потокам,
+        # но отсутствуют в Keitaro. Офферы без потока (flow=None) не трогаем,
+        # так как они могут быть добавлены в кампанию, но еще не привязаны к потоку.
         existing_offers = CampaignOffer.objects.filter(
             campaign=campaign,
-            status='active'
+            status='active',
+            flow__isnull=False  # Только офферы, привязанные к потокам
         )
         
         for offer in existing_offers:
             if offer.offer_id not in keitaro_offer_ids:
+                logger.info(f"Оффер {offer.offer_id} не найден в потоках Keitaro, помечаем как removed")
                 offer.status = 'removed'
                 offer.save()
+        
+        # Важно: офферы без потока (flow=None), которые были удалены пользователем,
+        # не должны восстанавливаться автоматически при синхронизации.
+        # Они остаются удаленными до явного восстановления пользователем.
 
     def push_flow_to_keitaro(self, flow: Flow) -> None:
         """Публикует изменения потока в Keitaro."""
@@ -765,6 +781,138 @@ class CampaignService:
         """Поиск офферов для autocomplete."""
         return self.api.search_offers(query, limit)
 
+    def sync_active_campaigns_from_api(self) -> List[Campaign]:
+        """
+        Синхронизирует активные кампании из Keitaro API с локальной БД.
+        Возвращает список активных кампаний.
+        """
+        try:
+            # Получаем активные кампании из API (без лимита, чтобы получить все)
+            api_campaigns = self.api.get_campaigns(limit=None)
+            
+            if not api_campaigns:
+                logger.warning("API вернул пустой список кампаний")
+                return []
+            
+            logger.info(f"Получено {len(api_campaigns)} активных кампаний из API")
+            logger.debug(f"Keitaro IDs из API: {[c.get('id') for c in api_campaigns if c.get('id')]}")
+            
+            active_campaigns = []
+            keitaro_ids_from_api = set()
+            
+            for api_campaign in api_campaigns:
+                keitaro_id = api_campaign.get('id')
+                if not keitaro_id:
+                    logger.warning(f"Пропущена кампания без ID: {api_campaign}")
+                    continue
+                    
+                keitaro_ids_from_api.add(keitaro_id)
+                
+                # Ищем кампанию в БД по keitaro_id
+                try:
+                    # Получаем domain, если он None, используем пустую строку
+                    domain_value = api_campaign.get('domain') or ''
+                    
+                    campaign, created = Campaign.objects.get_or_create(
+                        keitaro_id=keitaro_id,
+                        defaults={
+                            'name': api_campaign.get('name', ''),
+                            'geo': api_campaign.get('parameters', {}).get('geo', '') if isinstance(api_campaign.get('parameters'), dict) else '',
+                            'offer_id': 0,  # Будет обновлено при необходимости
+                            'domain': domain_value,
+                            'group': api_campaign.get('group', '') or '',
+                            'source': api_campaign.get('source', '') or '',
+                        }
+                    )
+                    
+                    if created:
+                        logger.debug(f"Создана новая кампания в БД: keitaro_id={keitaro_id}, name={campaign.name}")
+                    else:
+                        logger.debug(f"Найдена существующая кампания в БД: keitaro_id={keitaro_id}, name={campaign.name}")
+                    
+                    # Обновляем данные существующей кампании
+                    if not created:
+                        campaign.name = api_campaign.get('name', campaign.name)
+                        if isinstance(api_campaign.get('parameters'), dict):
+                            campaign.geo = api_campaign.get('parameters', {}).get('geo', campaign.geo)
+                        # Обрабатываем None значения
+                        domain_value = api_campaign.get('domain') or ''
+                        campaign.domain = domain_value
+                        campaign.group = api_campaign.get('group', '') or ''
+                        campaign.source = api_campaign.get('source', '') or ''
+                        campaign.save()
+                    
+                    active_campaigns.append(campaign)
+                    logger.debug(f"Добавлена кампания в список активных: keitaro_id={keitaro_id}, name={campaign.name}")
+                except Exception as e:
+                    logger.error(f"Ошибка при сохранении кампании с keitaro_id={keitaro_id}, name={api_campaign.get('name', 'N/A')}: {e}", exc_info=True)
+                    continue
+            
+            # Помечаем кампании, которых нет в API, как удаленные (но не удаляем из БД)
+            # Это нужно для истории
+            campaigns_not_in_api = Campaign.objects.exclude(
+                keitaro_id__in=keitaro_ids_from_api
+            ).exclude(keitaro_id__isnull=True)
+            
+            logger.info(f"Найдено {campaigns_not_in_api.count()} кампаний в БД, которых нет в активных API")
+            logger.info(f"Возвращаем {len(active_campaigns)} активных кампаний с keitaro_id: {list(keitaro_ids_from_api)}")
+            return active_campaigns
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Ошибка при синхронизации кампаний из API: {error_msg}", exc_info=True)
+            
+            # Если это ошибка авторизации, это критично - не показываем ничего
+            if '401' in error_msg or 'Unauthorized' in error_msg:
+                logger.error("Ошибка авторизации API. Проверьте KEITARO_API_KEY в .env файле.")
+            
+            # В случае ошибки возвращаем пустой список
+            return []
+
+    def get_deleted_campaigns_from_api(self) -> List[Dict]:
+        """Получает удаленные кампании из Keitaro API."""
+        try:
+            deleted_campaigns = self.api.get_deleted_campaigns()
+            logger.info(f"Получено {len(deleted_campaigns)} удаленных кампаний из API")
+            return deleted_campaigns
+        except Exception as e:
+            logger.error(f"Ошибка при получении удаленных кампаний из API: {e}", exc_info=True)
+            return []
+
+    def delete_flow(self, flow: Flow) -> bool:
+        """
+        Удаляет поток из Keitaro и из локальной БД.
+        
+        Args:
+            flow: Поток для удаления
+            
+        Returns:
+            True если удаление успешно, False в противном случае
+        """
+        if not flow.keitaro_id:
+            logger.warning(f"Поток {flow.pk} не имеет keitaro_id, удаляем только из БД")
+            flow.delete()
+            return True
+        
+        try:
+            # Удаляем поток из Keitaro
+            success = self.api.delete_flow(flow.keitaro_id)
+            if success:
+                logger.info(f"Поток {flow.keitaro_id} успешно удален из Keitaro")
+                # Удаляем поток из БД
+                flow.delete()
+                logger.info(f"Поток {flow.pk} удален из БД")
+                return True
+            else:
+                logger.error(f"Не удалось удалить поток {flow.keitaro_id} из Keitaro")
+                return False
+        except Exception as e:
+            logger.error(f"Ошибка при удалении потока {flow.keitaro_id}: {e}", exc_info=True)
+            # Даже если удаление из Keitaro не удалось, удаляем из БД
+            flow.delete()
+            logger.warning(f"Поток {flow.pk} удален из БД, но не из Keitaro")
+            return False
+
     def create_flow_for_campaign(
         self,
         campaign: Campaign,
@@ -816,15 +964,94 @@ class CampaignService:
             }
             logger.info(f"Creating filter: {country_filter}")
             
+            # Пробуем разные форматы action_payload и фильтров для redirect потоков
+            # Судя по API, action_payload может быть строкой (URL) или словарем
+            # Также пробуем разные форматы фильтров
+            filter_variants = [
+                # Вариант 1: стандартный формат
+                [{
+                    'name': 'country',
+                    'mode': 'accept',
+                    'payload': [country.upper()]
+                }],
+                # Вариант 2: с operator
+                [{
+                    'name': 'country',
+                    'operator': 'is',
+                    'value': country.upper()
+                }],
+                # Вариант 3: просто список значений
+                [{
+                    'name': 'country',
+                    'payload': [country.upper()]
+                }],
+            ]
+            
+            action_payload_variants = [
+                redirect_url,  # Просто URL как строка
+                {'url': redirect_url},  # URL в словаре
+            ]
+            
+            flow_data = None
+            last_error = None
+            
+            # Пробуем все комбинации форматов
+            for filter_variant in filter_variants:
+                for action_payload_variant in action_payload_variants:
+                    try:
+                        # Для redirect потоков action_payload может быть строкой (URL)
+                        if isinstance(action_payload_variant, str):
+                            payload = action_payload_variant
+                        elif isinstance(action_payload_variant, dict):
+                            payload = action_payload_variant
+                        else:
+                            payload = redirect_url
+                        
+                        logger.info(f"Пробуем создать поток: action_payload={payload}, filters={filter_variant}")
+                        flow_data = self.api.create_flow(
+                            campaign_id=campaign.keitaro_id,
+                            name=name,
+                            action_type=action_type,
+                            action_payload=payload,
+                            schema=schema,
+                            filters=filter_variant
+                        )
+                        
+                        if flow_data and flow_data.get('id'):
+                            logger.info(f"Поток успешно создан!")
+                            break
+                    except Exception as e:
+                        last_error = e
+                        error_msg = str(e)
+                        logger.warning(f"Не удалось создать поток: {error_msg}")
+                        # Если это 500 ошибка, проверяем, может быть поток создался
+                        if '500' in error_msg or 'Internal Server Error' in error_msg:
+                            logger.info(f"Получена ошибка 500, проверяем, создался ли поток")
+                            try:
+                                streams = self.api.get_campaign_streams(campaign.keitaro_id)
+                                for stream in streams:
+                                    stream_name = stream.get('name', '')
+                                    stream_id = stream.get('id')
+                                    stream_filters = stream.get('filters', [])
+                                    
+                                    # Проверяем по имени или по фильтрам
+                                    if name.lower() in stream_name.lower():
+                                        for f in stream_filters:
+                                            if f.get('name') == 'country' and country.upper() in str(f.get('payload', [])):
+                                                flow_data = {'id': stream_id, 'name': stream_name}
+                                                logger.info(f"Найден созданный поток после ошибки 500: ID={stream_id}")
+                                                break
+                                    if flow_data:
+                                        break
+                            except Exception as check_error:
+                                logger.warning(f"Не удалось проверить созданные потоки: {check_error}")
+                        continue
+                    if flow_data and flow_data.get('id'):
+                        break
+                if flow_data and flow_data.get('id'):
+                    break
+            
             try:
-                flow_data = self.api.create_flow(
-                    campaign_id=campaign.keitaro_id,
-                    name=name,
-                    action_type=action_type,
-                    action_payload={'url': redirect_url},
-                    schema=schema,
-                    filters=[country_filter]
-                )
                 
                 if flow_data and flow_data.get('id'):
                     flow = Flow.objects.create(
@@ -839,26 +1066,47 @@ class CampaignService:
                     )
                     logger.info(f"Поток успешно создан: ID={flow.keitaro_id}, name={flow.name}")
                     return flow
+                
+                # Проверяем, создался ли поток (возможно, API вернул ошибку 500, но поток создался)
+                logger.warning(f"Получен None при создании потока '{name}', проверяем, создался ли он")
+                found_flow = self._find_existing_flow(
+                    campaign=campaign,
+                    name=name,
+                    flow_type='country_filter',
+                    country=country,
+                    redirect_url=redirect_url
+                )
+                if found_flow:
+                    return found_flow
+                
+                # Если все попытки не удались
+                error_msg = f"Не удалось создать поток '{name}' после всех попыток."
+                if last_error:
+                    error_msg += f" Последняя ошибка: {str(last_error)}"
                 else:
-                    # Проверяем, создался ли поток (возможно, API вернул ошибку 500, но поток создался)
-                    logger.warning(f"Получен None при создании потока '{name}', проверяем, создался ли он")
-                    found_flow = self._find_existing_flow(
-                        campaign=campaign,
-                        name=name,
-                        flow_type='country_filter',
-                        country=country,
-                        redirect_url=redirect_url
-                    )
-                    if found_flow:
-                        return found_flow
-                    
-                    raise ValueError(f"Не удалось создать поток '{name}'. API вернул ошибку или поток не был найден. Проверьте логи.")
+                    error_msg += " API вернул ошибку или поток не был найден. Проверьте логи."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            except ValueError:
+                # Пробрасываем ValueError как есть
+                raise
             except Exception as e:
                 logger.error(f"Ошибка при создании потока '{name}': {e}", exc_info=True)
-                # Если это не ValueError, который мы уже обработали, пробрасываем дальше
-                if isinstance(e, ValueError):
-                    raise
-                raise ValueError(f"Ошибка при создании потока: {str(e)}")
+                # Проверяем, может быть поток все-таки создался
+                found_flow = self._find_existing_flow(
+                    campaign=campaign,
+                    name=name,
+                    flow_type='country_filter',
+                    country=country,
+                    redirect_url=redirect_url
+                )
+                if found_flow:
+                    return found_flow
+                
+                error_msg = f"Ошибка при создании потока: {str(e)}"
+                if last_error and str(e) != str(last_error):
+                    error_msg += f" (последняя ошибка: {str(last_error)})"
+                raise ValueError(error_msg)
         
         elif flow_type == 'offer_redirect':
             # Создаем поток с офферами
@@ -874,41 +1122,82 @@ class CampaignService:
             if not offer_id_list:
                 raise ValueError("Не указаны ID офферов")
             
-            # Для схемы 'landings' с офферами пробуем разные варианты
-            offers_payload = [{'id': oid, 'weight': 1} for oid in offer_id_list]
+            # Для схемы 'landings' с офферами пробуем разные варианты формата офферов
             flow_data = None
             last_error = None
             
+            # Варианты формата офферов
+            offer_formats = [
+                [{'id': oid, 'weight': 1} for oid in offer_id_list],  # Стандартный формат
+                [{'offer_id': oid, 'weight': 1} for oid in offer_id_list],  # С offer_id
+                [{'id': oid, 'share': 1} for oid in offer_id_list],  # С share вместо weight
+                [{'offer_id': oid, 'share': 1} for oid in offer_id_list],  # С offer_id и share
+            ]
+            
             # Варианты для попытки создания потока
+            # Для схемы 'landings' с офферами пробуем сначала без action_type, потом с разными типами
             attempts = [
+                {'schema': 'landings', 'action_type': None},  # Без action_type
                 {'schema': 'landings', 'action_type': 'meta'},
                 {'schema': 'landings', 'action_type': 'js'},
                 {'schema': 'landings', 'action_type': 'http'},
                 {'schema': 'action', 'action_type': 'http'},
             ]
             
-            # Пробуем каждый вариант
-            for attempt in attempts:
-                try:
-                    logger.info(f"Trying schema '{attempt['schema']}' with action_type '{attempt['action_type']}'")
-                    flow_data = self.api.create_flow(
-                        campaign_id=campaign.keitaro_id,
-                        name=name,
-                        action_type=attempt['action_type'],
-                        action_payload={'offers': offers_payload},
-                        schema=attempt['schema']
-                    )
-                    if flow_data and flow_data.get('id'):
-                        logger.info(f"Successfully created flow with {attempt}")
-                        break
-                except Exception as e:
-                    last_error = e
-                    logger.warning(f"Failed with {attempt}: {e}")
-                    continue
+            # Пробуем каждый вариант схемы и формата офферов
+            for offer_format in offer_formats:
+                if flow_data and flow_data.get('id'):
+                    break  # Уже создали поток, выходим из цикла по форматам
+                for attempt in attempts:
+                    try:
+                        logger.info(f"Trying schema '{attempt['schema']}' with action_type '{attempt['action_type']}', offers format: {offer_format[:1] if offer_format else 'empty'}")
+                        flow_data = self.api.create_flow(
+                            campaign_id=campaign.keitaro_id,
+                            name=name,
+                            action_type=attempt['action_type'],
+                            action_payload={'offers': offer_format},
+                            schema=attempt['schema']
+                        )
+                        if flow_data and flow_data.get('id'):
+                            logger.info(f"Successfully created flow with {attempt}")
+                            break  # Выходим из цикла по попыткам
+                    except Exception as e:
+                        last_error = e
+                        error_msg = str(e)
+                        logger.warning(f"Failed with {attempt}: {error_msg}")
+                        # Если это не 500 ошибка, которая может означать успех, продолжаем
+                        if '500' not in error_msg and 'Internal Server Error' not in error_msg:
+                            continue
+                        # Для 500 ошибки проверяем, может быть поток создался
+                        logger.info(f"Получена ошибка 500, проверяем, создался ли поток")
+                        try:
+                            streams = self.api.get_campaign_streams(campaign.keitaro_id)
+                            for stream in streams:
+                                stream_name = stream.get('name', '')
+                                stream_id = stream.get('id')
+                                stream_offers = stream.get('offers', [])
+                                stream_offer_ids = [o.get('offer_id') or o.get('id') for o in stream_offers if isinstance(o, dict)]
+                                
+                                if (name.lower() in stream_name.lower() or 
+                                    set(offer_id_list).issubset(set(stream_offer_ids))):
+                                    flow_data = {'id': stream_id, 'name': stream_name}
+                                    logger.info(f"Найден созданный поток после ошибки 500: ID={stream_id}")
+                                    break  # Выходим из цикла по потокам
+                            if flow_data and flow_data.get('id'):
+                                break  # Выходим из цикла по попыткам, если нашли поток
+                        except Exception as check_error:
+                            logger.warning(f"Не удалось проверить созданные потоки: {check_error}")
+                        continue
+                if flow_data and flow_data.get('id'):
+                    break  # Выходим из цикла по форматам, если создали поток
             
             # Если все попытки не удались
             if not flow_data or not flow_data.get('id'):
-                error_msg = f"Не удалось создать поток после всех попыток. Последняя ошибка: {str(last_error)}"
+                error_msg = f"Не удалось создать поток после всех попыток."
+                if last_error:
+                    error_msg += f" Последняя ошибка: {str(last_error)}"
+                else:
+                    error_msg += " API вернул ошибку или поток не был найден. Проверьте логи."
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             

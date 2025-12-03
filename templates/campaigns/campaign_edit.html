@@ -147,11 +147,12 @@
                                     <th>URL/Офферы</th>
                                     <th>Статус</th>
                                     <th>Создан</th>
+                                    <th>Действия</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {% for flow in flows %}
-                                <tr>
+                                <tr id="flow-row-{{ flow.pk }}">
                                     <td>{{ forloop.counter }}</td>
                                     <td><strong>{{ flow.name }}</strong></td>
                                     <td>
@@ -191,6 +192,17 @@
                                         {% endif %}
                                     </td>
                                     <td>{{ flow.created_at|date:"d.m.Y H:i" }}</td>
+                                    <td>
+                                        <button 
+                                            type="button" 
+                                            class="btn btn-sm btn-danger delete-flow-btn"
+                                            data-flow-id="{{ flow.pk }}"
+                                            data-campaign-id="{{ campaign.pk }}"
+                                            data-flow-name="{{ flow.name }}"
+                                        >
+                                            <i class="bi bi-trash"></i> Удалить
+                                        </button>
+                                    </td>
                                 </tr>
                                 {% endfor %}
                             </tbody>
@@ -329,7 +341,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             
             // Отправляем AJAX запрос
-            fetch(`/campaigns/${campaignId}/offers/${offerId}/remove/`, {
+            fetch(`/${campaignId}/offers/${offerId}/remove/`, {
                 method: 'POST',
                 headers: {
                     'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
@@ -366,6 +378,64 @@ document.addEventListener('DOMContentLoaded', function() {
             .catch(error => {
                 console.error('Error:', error);
                 alert('Произошла ошибка при удалении оффера');
+            });
+        });
+    });
+    
+    // Удаление потока
+    const deleteFlowButtons = document.querySelectorAll('.delete-flow-btn');
+    
+    deleteFlowButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const flowId = this.getAttribute('data-flow-id');
+            const campaignId = this.getAttribute('data-campaign-id');
+            const flowName = this.getAttribute('data-flow-name');
+            
+            if (!confirm(`Вы уверены, что хотите удалить поток "${flowName}"?`)) {
+                return;
+            }
+            
+            // Отправляем AJAX запрос
+            fetch(`/${campaignId}/flows/${flowId}/delete/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                    'Content-Type': 'application/json',
+                },
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Удаляем строку из таблицы
+                    const row = document.getElementById(`flow-row-${flowId}`);
+                    if (row) {
+                        row.remove();
+                        // Показываем сообщение об успехе
+                        const alert = document.createElement('div');
+                        alert.className = 'alert alert-success alert-dismissible fade show';
+                        alert.innerHTML = `
+                            ${data.message}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        `;
+                        document.querySelector('.container').insertBefore(alert, document.querySelector('.container').firstChild);
+                        
+                        // Обновляем счетчик потоков
+                        const flowsHeader = document.querySelector('.card-header.bg-info h5');
+                        if (flowsHeader) {
+                            const match = flowsHeader.textContent.match(/\((\d+)\)/);
+                            if (match) {
+                                const currentCount = parseInt(match[1]);
+                                flowsHeader.innerHTML = flowsHeader.innerHTML.replace(/\(\d+\)/, `(${currentCount - 1})`);
+                            }
+                        }
+                    }
+                } else {
+                    alert('Ошибка: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Произошла ошибка при удалении потока');
             });
         });
     });
